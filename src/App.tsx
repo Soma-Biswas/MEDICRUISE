@@ -6,10 +6,9 @@ import cleanserImage from "./assets/cleanser.png.jpeg"
 import serumImage from "./assets/serum.png.jpeg"
 import moisturizerImage from "./assets/moisturizer.png.jpeg"
 import logo from "./assets/logo.png"
-import { supabase } from "./supabaseClient"
 import AuthPage from "./AuthPage"
 import type { Session } from "@supabase/supabase-js"
-
+import { supabase } from "./lib/supabaseClient";
 /* ---------- brand tokens ----------
   ink      #24261F  – warm near-black for text
   cream    #F6F1E7  – base background
