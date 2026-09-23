@@ -134,6 +134,29 @@ type AddressForm = {
   pincode: string
 }
 
+// ---------- Order history types ----------
+type OrderItemRow = {
+  id: string
+  product_id: string
+  product_name: string
+  price: number
+  quantity: number
+}
+
+type OrderRow = {
+  id: string
+  total: number
+  status: string
+  full_name: string
+  phone: string
+  address_line: string
+  city: string
+  state: string
+  pincode: string
+  created_at: string
+  order_items: OrderItemRow[]
+}
+
 function LeafMark({ className = "" }: { className?: string }) {
   return (
     <svg viewBox="0 0 24 24" fill="none" className={className}>
@@ -799,6 +822,121 @@ function ProductPage({
   )
 }
 
+/* ---------------- MY ORDERS PAGE (own URL: /orders) ---------------- */
+
+function OrdersPage({ session }: { session: Session | null }) {
+  const [orders, setOrders] = useState<OrderRow[]>([])
+  const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
+
+  useEffect(() => {
+    if (!session) {
+      setLoading(false)
+      return
+    }
+    setLoading(true)
+    supabase
+      .from("orders")
+      .select("*, order_items(*)")
+      .order("created_at", { ascending: false })
+      .then(({ data, error }) => {
+        if (error) {
+          console.error(error)
+          setLoadError(true)
+        } else {
+          setOrders((data as OrderRow[]) ?? [])
+        }
+        setLoading(false)
+      })
+  }, [session])
+
+  if (!session) {
+    return (
+      <main className="max-w-3xl mx-auto px-6 py-24 text-center">
+        <LeafMark className="h-8 w-8 text-[#4B5D3A]/50 mx-auto mb-4" />
+        <p className="text-lg font-serif">Please log in to view your orders.</p>
+        <Link to="/login" className="mt-4 inline-block text-sm underline hover:text-[#4B5D3A]">
+          Go to Login
+        </Link>
+      </main>
+    )
+  }
+
+  if (loading) {
+    return (
+      <main className="max-w-3xl mx-auto px-6 py-24 text-center text-sm text-[#24261F]/60">
+        Loading your orders…
+      </main>
+    )
+  }
+
+  if (loadError) {
+    return (
+      <main className="max-w-3xl mx-auto px-6 py-24 text-center text-sm text-red-600">
+        Something went wrong loading your orders. Please refresh and try again.
+      </main>
+    )
+  }
+
+  if (orders.length === 0) {
+    return (
+      <main className="max-w-3xl mx-auto px-6 py-24 text-center">
+        <LeafMark className="h-8 w-8 text-[#4B5D3A]/50 mx-auto mb-4" />
+        <p className="text-lg font-serif">No orders yet.</p>
+        <Link to="/#products" className="mt-3 inline-block text-sm underline hover:text-[#4B5D3A]">
+          Browse products
+        </Link>
+      </main>
+    )
+  }
+
+  return (
+    <main className="max-w-4xl mx-auto px-6 py-16">
+      <h1 className="text-3xl font-serif mb-10">My Orders</h1>
+
+      <div className="space-y-6">
+        {orders.map((order) => (
+          <div key={order.id} className="border border-[#24261F]/10 rounded-xl bg-white p-6">
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+              <div>
+                <p className="text-sm font-medium">Order #{order.id.slice(0, 8)}</p>
+                <p className="text-xs text-[#24261F]/50">
+                  {new Date(order.created_at).toLocaleDateString("en-IN", {
+                    day: "numeric",
+                    month: "short",
+                    year: "numeric",
+                  })}
+                </p>
+              </div>
+              <span className="text-[10px] tracking-wider uppercase bg-[#EFE6D8] text-[#4B5D3A] px-2 py-1 rounded">
+                {order.status}
+              </span>
+            </div>
+
+            <ul className="divide-y divide-[#24261F]/10">
+              {order.order_items.map((item) => (
+                <li key={item.id} className="py-2 flex items-center justify-between text-sm">
+                  <span>
+                    {item.product_name} × {item.quantity}
+                  </span>
+                  <span>₹{item.price * item.quantity}</span>
+                </li>
+              ))}
+            </ul>
+
+            <div className="flex flex-wrap items-center justify-between gap-2 mt-4 pt-4 border-t border-[#24261F]/10 text-sm">
+              <span className="text-[#24261F]/60">
+                {order.full_name} · {order.address_line}, {order.city}, {order.state} - {order.pincode} · {order.phone}
+              </span>
+              <span className="font-semibold whitespace-nowrap">Total: ₹{order.total}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+    </main>
+  )
+}
+
 /* ---------------- APP SHELL (navbar, footer, cart — persistent across routes) ---------------- */
 
 function App() {
@@ -1016,6 +1154,11 @@ function App() {
                 {link.label}
               </Link>
             ))}
+            {session && (
+              <Link to="/orders" className="hover:text-[#4B5D3A] transition-colors">
+                My Orders
+              </Link>
+            )}
           </div>
 
           <div className="flex items-center gap-3">
@@ -1084,6 +1227,15 @@ function App() {
                   </Link>
                 ))}
                 {session && (
+                  <Link
+                    to="/orders"
+                    onClick={() => setMenuOpen(false)}
+                    className="hover:text-[#4B5D3A] transition-colors"
+                  >
+                    My Orders
+                  </Link>
+                )}
+                {session ? (
                   <button
                     onClick={() => {
                       setMenuOpen(false)
@@ -1093,6 +1245,14 @@ function App() {
                   >
                     Logout
                   </button>
+                ) : (
+                  <Link
+                    to="/login"
+                    onClick={() => setMenuOpen(false)}
+                    className="hover:text-[#4B5D3A] transition-colors"
+                  >
+                    Login
+                  </Link>
                 )}
               </div>
             </motion.div>
@@ -1119,6 +1279,7 @@ function App() {
           }
         />
         <Route path="/product/:productId" element={<ProductPage addToCartWithQty={addToCartWithQty} />} />
+        <Route path="/orders" element={<OrdersPage session={session} />} />
         <Route path="/login" element={<AuthPage onAuthed={() => {}} />} />
       </Routes>
 
@@ -1134,6 +1295,9 @@ function App() {
             <Link to="/#products" className="hover:text-[#4B5D3A] transition-colors">Products</Link>
             <Link to="/#about" className="hover:text-[#4B5D3A] transition-colors">About</Link>
             <Link to="/#contact" className="hover:text-[#4B5D3A] transition-colors">Contact</Link>
+            {session && (
+              <Link to="/orders" className="hover:text-[#4B5D3A] transition-colors">My Orders</Link>
+            )}
           </div>
         </div>
 
@@ -1284,15 +1448,27 @@ function App() {
                       <LeafMark className="h-8 w-8 text-[#4B5D3A] mx-auto" />
                       <p className="text-lg font-serif">Order placed!</p>
                       <p className="text-sm text-[#24261F]/60">Thank you for shopping with MEDICRUISE.</p>
-                      <button
-                        onClick={() => {
-                          setCheckoutStatus("idle")
-                          setCartOpen(false)
-                        }}
-                        className="text-sm underline hover:text-[#4B5D3A]"
-                      >
-                        Continue Shopping
-                      </button>
+                      <div className="flex items-center justify-center gap-4">
+                        <button
+                          onClick={() => {
+                            setCheckoutStatus("idle")
+                            setCartOpen(false)
+                          }}
+                          className="text-sm underline hover:text-[#4B5D3A]"
+                        >
+                          Continue Shopping
+                        </button>
+                        <Link
+                          to="/orders"
+                          onClick={() => {
+                            setCheckoutStatus("idle")
+                            setCartOpen(false)
+                          }}
+                          className="text-sm underline hover:text-[#4B5D3A]"
+                        >
+                          View My Orders
+                        </Link>
+                      </div>
                     </div>
                   )}
                 </>
