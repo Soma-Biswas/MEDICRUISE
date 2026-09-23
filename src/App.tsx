@@ -125,6 +125,15 @@ const WHY_CHOOSE = [
 
 type CartItem = AvailableProduct & { qty: number }
 
+type AddressForm = {
+  fullName: string
+  phone: string
+  addressLine: string
+  city: string
+  state: string
+  pincode: string
+}
+
 function LeafMark({ className = "" }: { className?: string }) {
   return (
     <svg viewBox="0 0 24 24" fill="none" className={className}>
@@ -807,6 +816,21 @@ function App() {
   const [session, setSession] = useState<Session | null>(null)
   const [checkoutStatus, setCheckoutStatus] = useState<"idle" | "saving" | "success" | "error">("idle")
 
+  // Checkout step: "cart" (viewing bag) -> "address" (collect shipping details) -> submits order
+  const [checkoutStep, setCheckoutStep] = useState<"cart" | "address">("cart")
+  const [addressForm, setAddressForm] = useState<AddressForm>({
+    fullName: "",
+    phone: "",
+    addressLine: "",
+    city: "",
+    state: "",
+    pincode: "",
+  })
+  const [addressErrors, setAddressErrors] = useState<{ [k: string]: string }>({})
+
+  // Logout confirmation modal
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false)
+
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session))
     const { data: listener } = supabase.auth.onAuthStateChange((_event, newSession) => {
@@ -815,20 +839,74 @@ function App() {
     return () => listener.subscription.unsubscribe()
   }, [])
 
-  async function handleLogout() {
-    await supabase.auth.signOut()
+  function handleLogoutClick() {
+    setShowLogoutConfirm(true)
   }
 
-  async function handleCheckout(navigate: (path: string) => void) {
+  async function confirmLogout() {
+    await supabase.auth.signOut()
+    setShowLogoutConfirm(false)
+  }
+
+  function cancelLogout() {
+    setShowLogoutConfirm(false)
+  }
+
+  function handleAddressChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const { name, value } = e.target
+    setAddressForm((prev) => ({ ...prev, [name]: value }))
+  }
+
+  function goToAddressStep() {
     if (!session) {
       setCartOpen(false)
       navigate("/login")
       return
     }
+    setCheckoutStatus("idle")
+    setCheckoutStep("address")
+  }
+
+  function backToCart() {
+    setCheckoutStep("cart")
+    setAddressErrors({})
+  }
+
+  async function handleAddressSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    const errors: { [k: string]: string } = {}
+    if (!addressForm.fullName.trim()) errors.fullName = "Enter your full name."
+    if (!/^[0-9]{10}$/.test(addressForm.phone.trim())) errors.phone = "Enter a valid 10-digit phone number."
+    if (!addressForm.addressLine.trim()) errors.addressLine = "Enter your address."
+    if (!addressForm.city.trim()) errors.city = "Enter your city."
+    if (!addressForm.state.trim()) errors.state = "Enter your state."
+    if (!/^[0-9]{6}$/.test(addressForm.pincode.trim())) errors.pincode = "Enter a valid 6-digit pincode."
+
+    setAddressErrors(errors)
+    if (Object.keys(errors).length > 0) return
+
+    await placeOrder()
+  }
+
+  async function placeOrder() {
+    if (!session) {
+      navigate("/login")
+      return
+    }
     setCheckoutStatus("saving")
+
     const { data: order, error: orderError } = await supabase
       .from("orders")
-      .insert({ user_id: session.user.id, total: subtotal })
+      .insert({
+        user_id: session.user.id,
+        total: subtotal,
+        full_name: addressForm.fullName.trim(),
+        phone: addressForm.phone.trim(),
+        address_line: addressForm.addressLine.trim(),
+        city: addressForm.city.trim(),
+        state: addressForm.state.trim(),
+        pincode: addressForm.pincode.trim(),
+      })
       .select()
       .single()
 
@@ -855,6 +933,8 @@ function App() {
 
     setCheckoutStatus("success")
     setCart([])
+    setCheckoutStep("cart")
+    setAddressForm({ fullName: "", phone: "", addressLine: "", city: "", state: "", pincode: "" })
   }
 
   const itemCount = cart.reduce((sum, item) => sum + item.qty, 0)
@@ -941,7 +1021,7 @@ function App() {
           <div className="flex items-center gap-3">
             {session ? (
               <button
-                onClick={handleLogout}
+                onClick={handleLogoutClick}
                 className="hidden sm:inline-block text-sm text-[#24261F]/70 hover:text-[#4B5D3A] transition-colors"
               >
                 Logout
@@ -956,7 +1036,10 @@ function App() {
             )}
 
             <button
-              onClick={() => setCartOpen(true)}
+              onClick={() => {
+                setCartOpen(true)
+                setCheckoutStep("cart")
+              }}
               aria-label="Open cart"
               className="relative border border-[#24261F]/15 rounded-full p-2.5 hover:border-[#4B5D3A] hover:text-[#4B5D3A] transition-colors"
             >
@@ -1000,6 +1083,17 @@ function App() {
                     {link.label}
                   </Link>
                 ))}
+                {session && (
+                  <button
+                    onClick={() => {
+                      setMenuOpen(false)
+                      handleLogoutClick()
+                    }}
+                    className="text-left hover:text-[#4B5D3A] transition-colors"
+                  >
+                    Logout
+                  </button>
+                )}
               </div>
             </motion.div>
           )}
@@ -1048,11 +1142,59 @@ function App() {
         </div>
       </footer>
 
+      {/* LOGOUT CONFIRMATION MODAL */}
+      <AnimatePresence>
+        {showLogoutConfirm && (
+          <>
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={cancelLogout}
+              className="fixed inset-0 bg-black/40 z-[60]"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="fixed inset-0 z-[61] flex items-center justify-center px-6"
+            >
+              <div className="bg-[#F6F1E7] rounded-2xl shadow-2xl max-w-sm w-full p-6 text-center">
+                <p className="text-lg font-serif">Log out of your account?</p>
+                <p className="text-sm text-[#24261F]/60 mt-2">
+                  You'll need to sign in again to view your orders or checkout.
+                </p>
+                <div className="mt-6 flex gap-3">
+                  <button
+                    onClick={cancelLogout}
+                    className="flex-1 border border-[#24261F]/15 text-sm py-2.5 rounded-md hover:border-[#4B5D3A] hover:text-[#4B5D3A] transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={confirmLogout}
+                    className="flex-1 bg-[#24261F] text-white text-sm py-2.5 rounded-md hover:bg-[#4B5D3A] transition-colors"
+                  >
+                    Logout
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+
       {/* CART DRAWER */}
       <AnimatePresence>
         {cartOpen && (
           <>
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setCartOpen(false)} className="fixed inset-0 bg-black/40 z-50" />
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setCartOpen(false)}
+              className="fixed inset-0 bg-black/40 z-50"
+            />
             <motion.aside
               initial={{ x: "100%" }}
               animate={{ x: 0 }}
@@ -1061,97 +1203,211 @@ function App() {
               className="fixed top-0 right-0 h-full w-full sm:w-[420px] bg-[#F6F1E7] z-50 flex flex-col shadow-2xl"
             >
               <div className="flex items-center justify-between px-6 py-5 border-b border-[#24261F]/10">
-                <h3 className="text-lg font-serif">Your Bag ({itemCount})</h3>
+                <h3 className="text-lg font-serif">
+                  {checkoutStep === "address" ? "Shipping Details" : `Your Bag (${itemCount})`}
+                </h3>
                 <button onClick={() => setCartOpen(false)} aria-label="Close cart" className="p-1 hover:text-[#4B5D3A]">
                   <CloseIcon className="h-5 w-5" />
                 </button>
               </div>
 
-              <div className="flex-1 overflow-y-auto px-6 py-4">
-                {cart.length === 0 ? (
-                  <div className="h-full flex flex-col items-center justify-center text-center gap-3">
-                    <LeafMark className="h-8 w-8 text-[#4B5D3A]/50" />
-                    <p className="text-sm text-[#24261F]/60">Your bag is empty. Explore our collection to get started.</p>
-                    <Link
-                      to="/#products"
-                      onClick={() => setCartOpen(false)}
-                      className="mt-2 text-sm underline hover:text-[#4B5D3A]"
-                    >
-                      Browse products
-                    </Link>
+              {/* CART VIEW */}
+              {checkoutStep === "cart" && (
+                <>
+                  <div className="flex-1 overflow-y-auto px-6 py-4">
+                    {cart.length === 0 ? (
+                      <div className="h-full flex flex-col items-center justify-center text-center gap-3">
+                        <LeafMark className="h-8 w-8 text-[#4B5D3A]/50" />
+                        <p className="text-sm text-[#24261F]/60">Your bag is empty. Explore our collection to get started.</p>
+                        <Link
+                          to="/#products"
+                          onClick={() => setCartOpen(false)}
+                          className="mt-2 text-sm underline hover:text-[#4B5D3A]"
+                        >
+                          Browse products
+                        </Link>
+                      </div>
+                    ) : (
+                      <ul className="space-y-5">
+                        {cart.map((item) => (
+                          <li key={item.id} className="flex gap-4">
+                            <div className="h-20 w-20 shrink-0 bg-white border border-[#24261F]/10 rounded-md p-2">
+                              <img src={item.image} alt={item.name} className="h-full w-full object-contain" />
+                            </div>
+
+                            <div className="flex-1">
+                              <div className="flex items-start justify-between gap-2">
+                                <p className="text-sm font-medium">{item.name}</p>
+                                <button onClick={() => removeFromCart(item.id)} aria-label={`Remove ${item.name}`} className="text-[#24261F]/40 hover:text-red-600 transition-colors">
+                                  <CloseIcon className="h-3.5 w-3.5" />
+                                </button>
+                              </div>
+
+                              <p className="text-sm text-[#24261F]/60 mt-1">₹{item.price}</p>
+
+                              <div className="flex items-center gap-3 mt-2">
+                                <button onClick={() => updateQty(item.id, -1)} className="h-7 w-7 border border-[#24261F]/15 rounded-md hover:border-[#4B5D3A]">
+                                  −
+                                </button>
+                                <span className="text-sm w-4 text-center">{item.qty}</span>
+                                <button onClick={() => updateQty(item.id, 1)} className="h-7 w-7 border border-[#24261F]/15 rounded-md hover:border-[#4B5D3A]">
+                                  +
+                                </button>
+                              </div>
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
                   </div>
-                ) : (
-                  <ul className="space-y-5">
-                    {cart.map((item) => (
-                      <li key={item.id} className="flex gap-4">
-                        <div className="h-20 w-20 shrink-0 bg-white border border-[#24261F]/10 rounded-md p-2">
-                          <img src={item.image} alt={item.name} className="h-full w-full object-contain" />
-                        </div>
 
-                        <div className="flex-1">
-                          <div className="flex items-start justify-between gap-2">
-                            <p className="text-sm font-medium">{item.name}</p>
-                            <button onClick={() => removeFromCart(item.id)} aria-label={`Remove ${item.name}`} className="text-[#24261F]/40 hover:text-red-600 transition-colors">
-                              <CloseIcon className="h-3.5 w-3.5" />
-                            </button>
-                          </div>
-
-                          <p className="text-sm text-[#24261F]/60 mt-1">₹{item.price}</p>
-
-                          <div className="flex items-center gap-3 mt-2">
-                            <button onClick={() => updateQty(item.id, -1)} className="h-7 w-7 border border-[#24261F]/15 rounded-md hover:border-[#4B5D3A]">
-                              −
-                            </button>
-                            <span className="text-sm w-4 text-center">{item.qty}</span>
-                            <button onClick={() => updateQty(item.id, 1)} className="h-7 w-7 border border-[#24261F]/15 rounded-md hover:border-[#4B5D3A]">
-                              +
-                            </button>
-                          </div>
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-
-              {cart.length > 0 && checkoutStatus !== "success" && (
-                <div className="border-t border-[#24261F]/10 px-6 py-5 space-y-4">
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-[#24261F]/60">Subtotal</span>
-                    <span className="font-semibold">₹{subtotal}</span>
-                  </div>
-                  {checkoutStatus === "error" && (
-                    <p className="text-xs text-red-600">Something went wrong saving your order. Please try again.</p>
+                  {cart.length > 0 && checkoutStatus !== "success" && (
+                    <div className="border-t border-[#24261F]/10 px-6 py-5 space-y-4">
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="text-[#24261F]/60">Subtotal</span>
+                        <span className="font-semibold">₹{subtotal}</span>
+                      </div>
+                      {checkoutStatus === "error" && (
+                        <p className="text-xs text-red-600">Something went wrong saving your order. Please try again.</p>
+                      )}
+                      <button
+                        onClick={goToAddressStep}
+                        className="w-full bg-[#24261F] text-white text-sm py-3 rounded-md hover:bg-[#4B5D3A] transition-colors"
+                      >
+                        {session ? "Proceed to Checkout" : "Login to Checkout"}
+                      </button>
+                    </div>
                   )}
-                  <button
-                    onClick={() => handleCheckout(navigate)}
-                    disabled={checkoutStatus === "saving"}
-                    className="w-full bg-[#24261F] text-white text-sm py-3 rounded-md hover:bg-[#4B5D3A] transition-colors disabled:opacity-60"
-                  >
-                    {checkoutStatus === "saving"
-                      ? "Placing order…"
-                      : session
-                      ? "Proceed to Checkout"
-                      : "Login to Checkout"}
-                  </button>
-                </div>
+
+                  {checkoutStatus === "success" && (
+                    <div className="border-t border-[#24261F]/10 px-6 py-8 text-center space-y-3">
+                      <LeafMark className="h-8 w-8 text-[#4B5D3A] mx-auto" />
+                      <p className="text-lg font-serif">Order placed!</p>
+                      <p className="text-sm text-[#24261F]/60">Thank you for shopping with MEDICRUISE.</p>
+                      <button
+                        onClick={() => {
+                          setCheckoutStatus("idle")
+                          setCartOpen(false)
+                        }}
+                        className="text-sm underline hover:text-[#4B5D3A]"
+                      >
+                        Continue Shopping
+                      </button>
+                    </div>
+                  )}
+                </>
               )}
 
-              {checkoutStatus === "success" && (
-                <div className="border-t border-[#24261F]/10 px-6 py-8 text-center space-y-3">
-                  <LeafMark className="h-8 w-8 text-[#4B5D3A] mx-auto" />
-                  <p className="text-lg font-serif">Order placed!</p>
-                  <p className="text-sm text-[#24261F]/60">Thank you for shopping with MEDICRUISE.</p>
+              {/* ADDRESS FORM VIEW */}
+              {checkoutStep === "address" && (
+                <form onSubmit={handleAddressSubmit} className="flex-1 overflow-y-auto px-6 py-5 flex flex-col">
                   <button
-                    onClick={() => {
-                      setCheckoutStatus("idle")
-                      setCartOpen(false)
-                    }}
-                    className="text-sm underline hover:text-[#4B5D3A]"
+                    type="button"
+                    onClick={backToCart}
+                    className="flex items-center gap-2 text-sm text-[#24261F]/60 hover:text-[#4B5D3A] transition-colors mb-5"
                   >
-                    Continue Shopping
+                    <ArrowLeftIcon className="h-4 w-4" />
+                    Back to bag
                   </button>
-                </div>
+
+                  <div className="space-y-4 flex-1">
+                    <div>
+                      <label className="mb-1.5 block text-sm">Full Name</label>
+                      <input
+                        type="text"
+                        name="fullName"
+                        value={addressForm.fullName}
+                        onChange={handleAddressChange}
+                        placeholder="Full name"
+                        className="w-full border border-[#24261F]/15 bg-transparent px-4 py-2.5 outline-none transition focus:border-[#4B5D3A] rounded-md text-sm"
+                      />
+                      {addressErrors.fullName && <p className="mt-1 text-xs text-red-600">{addressErrors.fullName}</p>}
+                    </div>
+
+                    <div>
+                      <label className="mb-1.5 block text-sm">Phone Number</label>
+                      <input
+                        type="tel"
+                        name="phone"
+                        value={addressForm.phone}
+                        onChange={handleAddressChange}
+                        placeholder="10-digit mobile number"
+                        className="w-full border border-[#24261F]/15 bg-transparent px-4 py-2.5 outline-none transition focus:border-[#4B5D3A] rounded-md text-sm"
+                      />
+                      {addressErrors.phone && <p className="mt-1 text-xs text-red-600">{addressErrors.phone}</p>}
+                    </div>
+
+                    <div>
+                      <label className="mb-1.5 block text-sm">Address</label>
+                      <textarea
+                        rows={3}
+                        name="addressLine"
+                        value={addressForm.addressLine}
+                        onChange={handleAddressChange}
+                        placeholder="House no., street, area"
+                        className="w-full resize-none border border-[#24261F]/15 bg-transparent px-4 py-2.5 outline-none transition focus:border-[#4B5D3A] rounded-md text-sm"
+                      />
+                      {addressErrors.addressLine && <p className="mt-1 text-xs text-red-600">{addressErrors.addressLine}</p>}
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="mb-1.5 block text-sm">City</label>
+                        <input
+                          type="text"
+                          name="city"
+                          value={addressForm.city}
+                          onChange={handleAddressChange}
+                          placeholder="City"
+                          className="w-full border border-[#24261F]/15 bg-transparent px-4 py-2.5 outline-none transition focus:border-[#4B5D3A] rounded-md text-sm"
+                        />
+                        {addressErrors.city && <p className="mt-1 text-xs text-red-600">{addressErrors.city}</p>}
+                      </div>
+                      <div>
+                        <label className="mb-1.5 block text-sm">State</label>
+                        <input
+                          type="text"
+                          name="state"
+                          value={addressForm.state}
+                          onChange={handleAddressChange}
+                          placeholder="State"
+                          className="w-full border border-[#24261F]/15 bg-transparent px-4 py-2.5 outline-none transition focus:border-[#4B5D3A] rounded-md text-sm"
+                        />
+                        {addressErrors.state && <p className="mt-1 text-xs text-red-600">{addressErrors.state}</p>}
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="mb-1.5 block text-sm">Pincode</label>
+                      <input
+                        type="text"
+                        name="pincode"
+                        value={addressForm.pincode}
+                        onChange={handleAddressChange}
+                        placeholder="6-digit pincode"
+                        className="w-full border border-[#24261F]/15 bg-transparent px-4 py-2.5 outline-none transition focus:border-[#4B5D3A] rounded-md text-sm"
+                      />
+                      {addressErrors.pincode && <p className="mt-1 text-xs text-red-600">{addressErrors.pincode}</p>}
+                    </div>
+                  </div>
+
+                  <div className="border-t border-[#24261F]/10 mt-5 pt-5 space-y-4">
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-[#24261F]/60">Subtotal</span>
+                      <span className="font-semibold">₹{subtotal}</span>
+                    </div>
+                    {checkoutStatus === "error" && (
+                      <p className="text-xs text-red-600">Something went wrong saving your order. Please try again.</p>
+                    )}
+                    <button
+                      type="submit"
+                      disabled={checkoutStatus === "saving"}
+                      className="w-full bg-[#24261F] text-white text-sm py-3 rounded-md hover:bg-[#4B5D3A] transition-colors disabled:opacity-60"
+                    >
+                      {checkoutStatus === "saving" ? "Placing order…" : `Place Order — ₹${subtotal}`}
+                    </button>
+                  </div>
+                </form>
               )}
             </motion.aside>
           </>
