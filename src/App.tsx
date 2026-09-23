@@ -852,7 +852,7 @@ function App() {
     setShowLogoutConfirm(false)
   }
 
-  function handleAddressChange(e: React.ChangeEvent<HTMLInputElement>) {
+  function handleAddressChange(e:React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) {
     const { name, value } = e.target
     setAddressForm((prev) => ({ ...prev, [name]: value }))
   }
