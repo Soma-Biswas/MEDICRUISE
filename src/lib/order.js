@@ -92,3 +92,17 @@ export async function getMyOrders() {
 
   return data
 }
+
+// Cancel an order (only works while it's pending or processing)
+export async function cancelOrder(orderId) {
+  const { data, error } = await supabase.rpc('cancel_order', {
+    p_order_id: orderId,
+  })
+
+  if (error) {
+    console.error('Cancel failed:', error.message)
+    return { order: null, error: error.message }
+  }
+
+  return { order: data, error: null }
+}
