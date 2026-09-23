@@ -1,11 +1,14 @@
 import { useEffect, useState } from "react"
 import { motion, AnimatePresence } from "motion/react"
-import { Routes, Route, Link, Navigate, useParams, useLocation } from "react-router-dom"
+import { Routes, Route, Link, Navigate, useParams, useLocation, useNavigate } from "react-router-dom"
 import Hero05 from "@/components/ui/hero-05"
 import cleanserImage from "./assets/cleanser.png.jpeg"
 import serumImage from "./assets/serum.png.jpeg"
 import moisturizerImage from "./assets/moisturizer.png.jpeg"
 import logo from "./assets/logo.png"
+import { supabase } from "./supabaseClient"
+import AuthPage from "./AuthPage"
+import type { Session } from "@supabase/supabase-js"
 
 /* ---------- brand tokens ----------
   ink      #24261F  – warm near-black for text
@@ -791,6 +794,7 @@ function ProductPage({
 /* ---------------- APP SHELL (navbar, footer, cart — persistent across routes) ---------------- */
 
 function App() {
+  const navigate = useNavigate()
   const [cart, setCart] = useState<CartItem[]>([])
   const [cartOpen, setCartOpen] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
@@ -800,6 +804,59 @@ function App() {
   const [form, setForm] = useState({ name: "", email: "", message: "" })
   const [formErrors, setFormErrors] = useState<{ [k: string]: string }>({})
   const [formSubmitted, setFormSubmitted] = useState(false)
+
+  const [session, setSession] = useState<Session | null>(null)
+  const [checkoutStatus, setCheckoutStatus] = useState<"idle" | "saving" | "success" | "error">("idle")
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => setSession(data.session))
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, newSession) => {
+      setSession(newSession)
+    })
+    return () => listener.subscription.unsubscribe()
+  }, [])
+
+  async function handleLogout() {
+    await supabase.auth.signOut()
+  }
+
+  async function handleCheckout(navigate: (path: string) => void) {
+    if (!session) {
+      setCartOpen(false)
+      navigate("/login")
+      return
+    }
+    setCheckoutStatus("saving")
+    const { data: order, error: orderError } = await supabase
+      .from("orders")
+      .insert({ user_id: session.user.id, total: subtotal })
+      .select()
+      .single()
+
+    if (orderError || !order) {
+      console.error(orderError)
+      setCheckoutStatus("error")
+      return
+    }
+
+    const items = cart.map((item) => ({
+      order_id: order.id,
+      product_id: item.id,
+      product_name: item.name,
+      price: item.price,
+      quantity: item.qty,
+    }))
+    const { error: itemsError } = await supabase.from("order_items").insert(items)
+
+    if (itemsError) {
+      console.error(itemsError)
+      setCheckoutStatus("error")
+      return
+    }
+
+    setCheckoutStatus("success")
+    setCart([])
+  }
 
   const itemCount = cart.reduce((sum, item) => sum + item.qty, 0)
   const subtotal = cart.reduce((sum, item) => sum + item.qty * item.price, 0)
@@ -883,6 +940,22 @@ function App() {
           </div>
 
           <div className="flex items-center gap-3">
+            {session ? (
+              <button
+                onClick={handleLogout}
+                className="hidden sm:inline-block text-sm text-[#24261F]/70 hover:text-[#4B5D3A] transition-colors"
+              >
+                Logout
+              </button>
+            ) : (
+              <Link
+                to="/login"
+                className="hidden sm:inline-block text-sm text-[#24261F]/70 hover:text-[#4B5D3A] transition-colors"
+              >
+                Login
+              </Link>
+            )}
+
             <button
               onClick={() => setCartOpen(true)}
               aria-label="Open cart"
@@ -953,6 +1026,7 @@ function App() {
           }
         />
         <Route path="/product/:productId" element={<ProductPage addToCartWithQty={addToCartWithQty} />} />
+        <Route path="/login" element={<AuthPage onAuthed={() => {}} />} />
       </Routes>
 
       {/* FOOTER */}
@@ -971,7 +1045,7 @@ function App() {
         </div>
 
         <div className="mx-auto mt-8 max-w-7xl border-t border-[#24261F]/10 pt-6">
-          <p className="text-xs text-[#24261F]/50">© 2026 MEDICRUISE. All Rights Reserved.</p>
+          <p className="text-xs text-[#24261F]/50">© 2026 MEDICRUISE. All rights reserved.</p>
         </div>
       </footer>
 
@@ -1041,17 +1115,42 @@ function App() {
                 )}
               </div>
 
-              {cart.length > 0 && (
+              {cart.length > 0 && checkoutStatus !== "success" && (
                 <div className="border-t border-[#24261F]/10 px-6 py-5 space-y-4">
                   <div className="flex items-center justify-between text-sm">
                     <span className="text-[#24261F]/60">Subtotal</span>
                     <span className="font-semibold">₹{subtotal}</span>
                   </div>
+                  {checkoutStatus === "error" && (
+                    <p className="text-xs text-red-600">Something went wrong saving your order. Please try again.</p>
+                  )}
                   <button
-                    onClick={() => alert("This is a demo — checkout isn't connected yet.")}
-                    className="w-full bg-[#24261F] text-white text-sm py-3 rounded-md hover:bg-[#4B5D3A] transition-colors"
+                    onClick={() => handleCheckout(navigate)}
+                    disabled={checkoutStatus === "saving"}
+                    className="w-full bg-[#24261F] text-white text-sm py-3 rounded-md hover:bg-[#4B5D3A] transition-colors disabled:opacity-60"
                   >
-                    Proceed to Checkout
+                    {checkoutStatus === "saving"
+                      ? "Placing order…"
+                      : session
+                      ? "Proceed to Checkout"
+                      : "Login to Checkout"}
+                  </button>
+                </div>
+              )}
+
+              {checkoutStatus === "success" && (
+                <div className="border-t border-[#24261F]/10 px-6 py-8 text-center space-y-3">
+                  <LeafMark className="h-8 w-8 text-[#4B5D3A] mx-auto" />
+                  <p className="text-lg font-serif">Order placed!</p>
+                  <p className="text-sm text-[#24261F]/60">Thank you for shopping with MEDICRUISE.</p>
+                  <button
+                    onClick={() => {
+                      setCheckoutStatus("idle")
+                      setCartOpen(false)
+                    }}
+                    className="text-sm underline hover:text-[#4B5D3A]"
+                  >
+                    Continue Shopping
                   </button>
                 </div>
               )}
