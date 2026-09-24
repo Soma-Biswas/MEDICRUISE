@@ -843,6 +843,7 @@ function App() {
     cvv: "",
   })
   const [paymentErrors, setPaymentErrors] = useState<{ [k: string]: string }>({})
+  const [paymentMethod, setPaymentMethod] = useState<"card" | "cod">("card")
 
   // Logout confirmation modal
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false)
@@ -854,6 +855,29 @@ function App() {
     })
     return () => listener.subscription.unsubscribe()
   }, [])
+
+  // Load the person's saved address (if any) once they're signed in, so they
+  // don't have to retype it every time they check out.
+  useEffect(() => {
+    if (!session) return
+    supabase
+      .from("saved_addresses")
+      .select("*")
+      .eq("user_id", session.user.id)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (data) {
+          setAddressForm({
+            fullName: data.full_name ?? "",
+            phone: data.phone ?? "",
+            addressLine: data.address_line ?? "",
+            city: data.city ?? "",
+            state: data.state ?? "",
+            pincode: data.pincode ?? "",
+          })
+        }
+      })
+  }, [session])
 
   function handleLogoutClick() {
     setShowLogoutConfirm(true)
@@ -893,7 +917,7 @@ function App() {
     setPaymentErrors({})
   }
 
-  function handleAddressSubmit(e: React.FormEvent) {
+  async function handleAddressSubmit(e: React.FormEvent) {
     e.preventDefault()
     const errors: { [k: string]: string } = {}
     if (!addressForm.fullName.trim()) errors.fullName = "Enter your full name."
@@ -906,6 +930,26 @@ function App() {
     setAddressErrors(errors)
     if (Object.keys(errors).length > 0) return
 
+    // Remember this address for next time (silently — if it fails, checkout
+    // still continues, it just won't be pre-filled on the next order).
+    if (session) {
+      supabase
+        .from("saved_addresses")
+        .upsert({
+          user_id: session.user.id,
+          full_name: addressForm.fullName.trim(),
+          phone: addressForm.phone.trim(),
+          address_line: addressForm.addressLine.trim(),
+          city: addressForm.city.trim(),
+          state: addressForm.state.trim(),
+          pincode: addressForm.pincode.trim(),
+          updated_at: new Date().toISOString(),
+        })
+        .then(({ error }) => {
+          if (error) console.error("Could not save address for next time:", error)
+        })
+    }
+
     setCheckoutStep("payment")
   }
 
@@ -914,12 +958,18 @@ function App() {
     setPaymentForm((prev) => ({ ...prev, [name]: value }))
   }
 
-  // NOTE: This is a placeholder / demo payment screen only.
+  // NOTE: The "card" path here is a placeholder / demo payment screen only.
   // No card details are sent anywhere or charged — this simply validates the
   // format of what's typed, then saves the order to the database as "paid".
   // Swap this out for a real gateway (Razorpay, Stripe, etc.) before going live.
   async function handlePaymentSubmit(e: React.FormEvent) {
     e.preventDefault()
+
+    if (paymentMethod === "cod") {
+      await placeOrder()
+      return
+    }
+
     const errors: { [k: string]: string } = {}
     if (!paymentForm.cardName.trim()) errors.cardName = "Enter the name on the card."
     if (!/^[0-9]{13,19}$/.test(paymentForm.cardNumber.replace(/\s/g, "")))
@@ -940,16 +990,20 @@ function App() {
     }
     setCheckoutStatus("saving")
 
-    // Simulate a brief "processing payment" delay so it feels real —
-    // no actual charge happens anywhere in this flow.
-    await new Promise((resolve) => setTimeout(resolve, 1200))
+    // Simulate a brief "processing payment" delay for card payments so it
+    // feels real — no actual charge happens anywhere in this flow. Cash on
+    // Delivery has no payment step, so it skips straight to saving the order.
+    if (paymentMethod === "card") {
+      await new Promise((resolve) => setTimeout(resolve, 1200))
+    }
 
     const { data: order, error: orderError } = await supabase
       .from("orders")
       .insert({
         user_id: session.user.id,
         total: subtotal,
-        payment_status: "paid",
+        payment_status: paymentMethod === "cod" ? "cod_pending" : "paid",
+        payment_method: paymentMethod,
         full_name: addressForm.fullName.trim(),
         phone: addressForm.phone.trim(),
         address_line: addressForm.addressLine.trim(),
@@ -984,7 +1038,6 @@ function App() {
     setCheckoutStatus("success")
     setCart([])
     setCheckoutStep("cart")
-    setAddressForm({ fullName: "", phone: "", addressLine: "", city: "", state: "", pincode: "" })
     setPaymentForm({ cardName: "", cardNumber: "", expiry: "", cvv: "" })
   }
 
@@ -1449,87 +1502,125 @@ function App() {
                   </button>
 
                   <div className="space-y-4 flex-1">
-                    <div className="rounded-lg bg-white border border-[#24261F]/10 p-4">
-                      <div className="flex items-center justify-between mb-3">
-                        <span className="text-xs uppercase tracking-wider text-[#24261F]/50">Card Payment</span>
-                        <div className="flex gap-1.5">
-                          <div className="h-5 w-8 rounded bg-[#EFE6D8]" />
-                          <div className="h-5 w-8 rounded bg-[#EFE6D8]" />
-                        </div>
-                      </div>
-
-                      <div className="space-y-4">
-                        <div>
-                          <label className="mb-1.5 block text-sm">Name on Card</label>
-                          <input
-                            type="text"
-                            name="cardName"
-                            value={paymentForm.cardName}
-                            onChange={handlePaymentChange}
-                            placeholder="Name as on card"
-                            autoComplete="cc-name"
-                            className="w-full border border-[#24261F]/15 bg-transparent px-4 py-2.5 outline-none transition focus:border-[#4B5D3A] rounded-md text-sm"
-                          />
-                          {paymentErrors.cardName && <p className="mt-1 text-xs text-red-600">{paymentErrors.cardName}</p>}
-                        </div>
-
-                        <div>
-                          <label className="mb-1.5 block text-sm">Card Number</label>
-                          <input
-                            type="text"
-                            name="cardNumber"
-                            value={paymentForm.cardNumber}
-                            onChange={handlePaymentChange}
-                            placeholder="1234 5678 9012 3456"
-                            inputMode="numeric"
-                            autoComplete="cc-number"
-                            maxLength={19}
-                            className="w-full border border-[#24261F]/15 bg-transparent px-4 py-2.5 outline-none transition focus:border-[#4B5D3A] rounded-md text-sm"
-                          />
-                          {paymentErrors.cardNumber && <p className="mt-1 text-xs text-red-600">{paymentErrors.cardNumber}</p>}
-                        </div>
-
-                        <div className="grid grid-cols-2 gap-3">
-                          <div>
-                            <label className="mb-1.5 block text-sm">Expiry</label>
-                            <input
-                              type="text"
-                              name="expiry"
-                              value={paymentForm.expiry}
-                              onChange={handlePaymentChange}
-                              placeholder="MM/YY"
-                              autoComplete="cc-exp"
-                              maxLength={5}
-                              className="w-full border border-[#24261F]/15 bg-transparent px-4 py-2.5 outline-none transition focus:border-[#4B5D3A] rounded-md text-sm"
-                            />
-                            {paymentErrors.expiry && <p className="mt-1 text-xs text-red-600">{paymentErrors.expiry}</p>}
-                          </div>
-                          <div>
-                            <label className="mb-1.5 block text-sm">CVV</label>
-                            <input
-                              type="password"
-                              name="cvv"
-                              value={paymentForm.cvv}
-                              onChange={handlePaymentChange}
-                              placeholder="•••"
-                              autoComplete="cc-csc"
-                              maxLength={4}
-                              className="w-full border border-[#24261F]/15 bg-transparent px-4 py-2.5 outline-none transition focus:border-[#4B5D3A] rounded-md text-sm"
-                            />
-                            {paymentErrors.cvv && <p className="mt-1 text-xs text-red-600">{paymentErrors.cvv}</p>}
-                          </div>
-                        </div>
-                      </div>
+                    {/* PAYMENT METHOD SELECTOR */}
+                    <div className="grid grid-cols-2 gap-3">
+                      <button
+                        type="button"
+                        onClick={() => setPaymentMethod("card")}
+                        className={`text-sm py-2.5 rounded-md border transition-colors ${
+                          paymentMethod === "card"
+                            ? "bg-[#24261F] text-white border-[#24261F]"
+                            : "border-[#24261F]/15 text-[#24261F]/70 hover:border-[#4B5D3A] hover:text-[#4B5D3A]"
+                        }`}
+                      >
+                        Card Payment
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPaymentMethod("cod")}
+                        className={`text-sm py-2.5 rounded-md border transition-colors ${
+                          paymentMethod === "cod"
+                            ? "bg-[#24261F] text-white border-[#24261F]"
+                            : "border-[#24261F]/15 text-[#24261F]/70 hover:border-[#4B5D3A] hover:text-[#4B5D3A]"
+                        }`}
+                      >
+                        Cash on Delivery
+                      </button>
                     </div>
 
-                    <p className="text-[11px] text-[#24261F]/40 text-center">
-                      🔒 Payments are securely encrypted.
-                    </p>
+                    {paymentMethod === "card" ? (
+                      <div className="rounded-lg bg-white border border-[#24261F]/10 p-4">
+                        <div className="flex items-center justify-between mb-3">
+                          <span className="text-xs uppercase tracking-wider text-[#24261F]/50">Card Details</span>
+                          <div className="flex gap-1.5">
+                            <div className="h-5 w-8 rounded bg-[#EFE6D8]" />
+                            <div className="h-5 w-8 rounded bg-[#EFE6D8]" />
+                          </div>
+                        </div>
+
+                        <div className="space-y-4">
+                          <div>
+                            <label className="mb-1.5 block text-sm">Name on Card</label>
+                            <input
+                              type="text"
+                              name="cardName"
+                              value={paymentForm.cardName}
+                              onChange={handlePaymentChange}
+                              placeholder="Name as on card"
+                              autoComplete="cc-name"
+                              className="w-full border border-[#24261F]/15 bg-transparent px-4 py-2.5 outline-none transition focus:border-[#4B5D3A] rounded-md text-sm"
+                            />
+                            {paymentErrors.cardName && <p className="mt-1 text-xs text-red-600">{paymentErrors.cardName}</p>}
+                          </div>
+
+                          <div>
+                            <label className="mb-1.5 block text-sm">Card Number</label>
+                            <input
+                              type="text"
+                              name="cardNumber"
+                              value={paymentForm.cardNumber}
+                              onChange={handlePaymentChange}
+                              placeholder="1234 5678 9012 3456"
+                              inputMode="numeric"
+                              autoComplete="cc-number"
+                              maxLength={19}
+                              className="w-full border border-[#24261F]/15 bg-transparent px-4 py-2.5 outline-none transition focus:border-[#4B5D3A] rounded-md text-sm"
+                            />
+                            {paymentErrors.cardNumber && <p className="mt-1 text-xs text-red-600">{paymentErrors.cardNumber}</p>}
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-3">
+                            <div>
+                              <label className="mb-1.5 block text-sm">Expiry</label>
+                              <input
+                                type="text"
+                                name="expiry"
+                                value={paymentForm.expiry}
+                                onChange={handlePaymentChange}
+                                placeholder="MM/YY"
+                                autoComplete="cc-exp"
+                                maxLength={5}
+                                className="w-full border border-[#24261F]/15 bg-transparent px-4 py-2.5 outline-none transition focus:border-[#4B5D3A] rounded-md text-sm"
+                              />
+                              {paymentErrors.expiry && <p className="mt-1 text-xs text-red-600">{paymentErrors.expiry}</p>}
+                            </div>
+                            <div>
+                              <label className="mb-1.5 block text-sm">CVV</label>
+                              <input
+                                type="password"
+                                name="cvv"
+                                value={paymentForm.cvv}
+                                onChange={handlePaymentChange}
+                                placeholder="•••"
+                                autoComplete="cc-csc"
+                                maxLength={4}
+                                className="w-full border border-[#24261F]/15 bg-transparent px-4 py-2.5 outline-none transition focus:border-[#4B5D3A] rounded-md text-sm"
+                              />
+                              {paymentErrors.cvv && <p className="mt-1 text-xs text-red-600">{paymentErrors.cvv}</p>}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="rounded-lg bg-white border border-[#24261F]/10 p-5 text-center">
+                        <LeafMark className="h-7 w-7 text-[#4B5D3A] mx-auto mb-3" />
+                        <p className="text-sm font-medium">Pay with cash when your order arrives</p>
+                        <p className="text-xs text-[#24261F]/60 mt-1.5">
+                          Keep exact change ready for a smoother delivery.
+                        </p>
+                      </div>
+                    )}
+
+                    {paymentMethod === "card" && (
+                      <p className="text-[11px] text-[#24261F]/40 text-center">
+                        🔒 Payments are securely encrypted.
+                      </p>
+                    )}
                   </div>
 
                   <div className="border-t border-[#24261F]/10 mt-5 pt-5 space-y-4">
                     <div className="flex items-center justify-between text-sm">
-                      <span className="text-[#24261F]/60">Total</span>
+                      <span className="text-[#24261F]/60">{paymentMethod === "cod" ? "Amount Due on Delivery" : "Total"}</span>
                       <span className="font-semibold">₹{subtotal}</span>
                     </div>
                     {checkoutStatus === "error" && (
@@ -1540,7 +1631,13 @@ function App() {
                       disabled={checkoutStatus === "saving"}
                       className="w-full bg-[#24261F] text-white text-sm py-3 rounded-md hover:bg-[#4B5D3A] transition-colors disabled:opacity-60"
                     >
-                      {checkoutStatus === "saving" ? "Processing payment…" : `Pay ₹${subtotal}`}
+                      {checkoutStatus === "saving"
+                        ? paymentMethod === "cod"
+                          ? "Placing order…"
+                          : "Processing payment…"
+                        : paymentMethod === "cod"
+                        ? `Place Order — ₹${subtotal}`
+                        : `Pay ₹${subtotal}`}
                     </button>
                   </div>
                 </form>
