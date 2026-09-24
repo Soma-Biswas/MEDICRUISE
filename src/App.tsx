@@ -142,6 +142,29 @@ type PaymentForm = {
   cvv: string
 }
 
+type OrderRow = {
+  id: string
+  total: number
+  status: string
+  payment_method: string | null
+  payment_status: string | null
+  created_at: string
+  cancelled_at: string | null
+  full_name: string | null
+  phone: string | null
+  address_line: string | null
+  city: string | null
+  state: string | null
+  pincode: string | null
+  order_items: {
+    id: string
+    product_id: string
+    product_name: string
+    price: number
+    quantity: number
+  }[]
+}
+
 function LeafMark({ className = "" }: { className?: string }) {
   return (
     <svg viewBox="0 0 24 24" fill="none" className={className}>
@@ -807,6 +830,172 @@ function ProductPage({
   )
 }
 
+/* ---------------- MY ORDERS PAGE (/orders) ---------------- */
+
+const CANCELLABLE = ["placed", "pending", "processing"]
+
+function MyOrdersPage({ session, authLoading }: { session: Session | null; authLoading: boolean }) {
+  const [orders, setOrders] = useState<OrderRow[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [cancellingId, setCancellingId] = useState<string | null>(null)
+  const [confirmId, setConfirmId] = useState<string | null>(null)
+
+  async function loadOrders() {
+    if (!session) return
+    setLoading(true)
+    setError(null)
+    const { data, error } = await supabase
+      .from("orders")
+      .select("*, order_items(*)")
+      .eq("user_id", session.user.id)
+      .order("created_at", { ascending: false })
+    if (error) {
+      console.error(error)
+      setError("Could not load your orders. Please try again.")
+    } else {
+      setOrders((data ?? []) as OrderRow[])
+    }
+    setLoading(false)
+  }
+
+  useEffect(() => {
+    loadOrders()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.user.id])
+
+  async function cancelOrder(orderId: string) {
+    setCancellingId(orderId)
+    setError(null)
+    const { error } = await supabase.rpc("cancel_order", { p_order_id: orderId })
+    setCancellingId(null)
+    setConfirmId(null)
+    if (error) {
+      setError(error.message)
+      return
+    }
+    await loadOrders()
+  }
+
+  if (authLoading) return <main className="max-w-3xl mx-auto px-6 py-16 text-sm text-[#24261F]/60">Loading…</main>
+  if (!session) return <Navigate to="/login" replace />
+
+  return (
+    <main className="max-w-3xl mx-auto px-6 py-10 min-h-[60vh]">
+      <h1 className="text-3xl font-serif mb-8">My Orders</h1>
+
+      {error && <p className="mb-4 text-sm text-red-600">{error}</p>}
+
+      {loading ? (
+        <p className="text-sm text-[#24261F]/60">Loading your orders…</p>
+      ) : orders.length === 0 ? (
+        <div className="text-center py-16 border border-dashed border-[#24261F]/15 rounded-xl">
+          <LeafMark className="h-8 w-8 text-[#4B5D3A]/50 mx-auto mb-3" />
+          <p className="text-sm text-[#24261F]/60">You haven't placed any orders yet.</p>
+          <Link to="/#products" className="mt-3 inline-block text-sm underline hover:text-[#4B5D3A]">
+            Browse products
+          </Link>
+        </div>
+      ) : (
+        <div className="space-y-6">
+          {orders.map((order) => {
+            const status = order.status?.toLowerCase() ?? "placed"
+            const canCancel = CANCELLABLE.includes(status)
+            const isCancelled = status === "cancelled"
+            return (
+              <div key={order.id} className="bg-white border border-[#24261F]/10 rounded-xl p-5">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className="text-xs text-[#24261F]/50">Order #{order.id.slice(0, 8).toUpperCase()}</p>
+                    <p className="text-sm mt-0.5">
+                      {new Date(order.created_at).toLocaleDateString("en-IN", {
+                        day: "numeric",
+                        month: "short",
+                        year: "numeric",
+                      })}
+                    </p>
+                  </div>
+                  <span
+                    className={`text-[10px] tracking-wider uppercase px-2.5 py-1 rounded-full ${
+                      isCancelled ? "bg-red-50 text-red-700" : "bg-[#EFE6D8] text-[#4B5D3A]"
+                    }`}
+                  >
+                    {status}
+                  </span>
+                </div>
+
+                <ul className="mt-4 divide-y divide-[#24261F]/10 border-y border-[#24261F]/10">
+                  {order.order_items.map((it) => (
+                    <li key={it.id} className="flex items-center justify-between py-2.5 text-sm">
+                      <span>
+                        {it.product_name} <span className="text-[#24261F]/50">× {it.quantity}</span>
+                      </span>
+                      <span>₹{it.price * it.quantity}</span>
+                    </li>
+                  ))}
+                </ul>
+
+                <div className="mt-4 grid sm:grid-cols-2 gap-4 text-sm">
+                  <div>
+                    <p className="text-xs uppercase tracking-wider text-[#24261F]/50 mb-1">Shipping to</p>
+                    <p>{order.full_name}</p>
+                    <p className="text-[#24261F]/60">
+                      {order.address_line}, {order.city}, {order.state} – {order.pincode}
+                    </p>
+                    <p className="text-[#24261F]/60">📞 {order.phone}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs uppercase tracking-wider text-[#24261F]/50 mb-1">Payment</p>
+                    <p>{order.payment_method === "cod" ? "Cash on Delivery" : "Card"}</p>
+                    <p className="text-[#24261F]/60 capitalize">{order.payment_status?.replace("_", " ")}</p>
+                    <p className="font-semibold mt-1">Total: ₹{order.total}</p>
+                  </div>
+                </div>
+
+                {isCancelled && order.cancelled_at && (
+                  <p className="mt-3 text-xs text-red-700">
+                    Cancelled on {new Date(order.cancelled_at).toLocaleDateString("en-IN")}
+                  </p>
+                )}
+
+                {canCancel && (
+                  <div className="mt-4">
+                    {confirmId === order.id ? (
+                      <div className="flex flex-wrap items-center gap-3">
+                        <span className="text-sm">Cancel this order?</span>
+                        <button
+                          onClick={() => cancelOrder(order.id)}
+                          disabled={cancellingId === order.id}
+                          className="text-sm bg-red-600 text-white px-4 py-2 rounded-md hover:bg-red-700 disabled:opacity-60"
+                        >
+                          {cancellingId === order.id ? "Cancelling…" : "Yes, cancel"}
+                        </button>
+                        <button
+                          onClick={() => setConfirmId(null)}
+                          className="text-sm border border-[#24261F]/15 px-4 py-2 rounded-md hover:border-[#4B5D3A]"
+                        >
+                          No
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => setConfirmId(order.id)}
+                        className="text-sm border border-red-300 text-red-700 px-4 py-2 rounded-md hover:bg-red-50 transition-colors"
+                      >
+                        Cancel Order
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </main>
+  )
+}
+
 /* ---------------- APP SHELL (navbar, footer, cart — persistent across routes) ---------------- */
 
 function App() {
@@ -822,6 +1011,7 @@ function App() {
   const [formSubmitted, setFormSubmitted] = useState(false)
 
   const [session, setSession] = useState<Session | null>(null)
+  const [authLoading, setAuthLoading] = useState(true)
   const [checkoutStatus, setCheckoutStatus] = useState<"idle" | "saving" | "success" | "error">("idle")
 
   // Checkout flow: "cart" -> "address" -> "payment" -> (order saved) -> "cart" shows success
@@ -849,7 +1039,10 @@ function App() {
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false)
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => setSession(data.session))
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session)
+      setAuthLoading(false)
+    })
     const { data: listener } = supabase.auth.onAuthStateChange((_event, newSession) => {
       setSession(newSession)
     })
@@ -1101,6 +1294,7 @@ function App() {
     { label: "Products", to: "/#products" },
     { label: "About", to: "/#about" },
     { label: "Contact", to: "/#contact" },
+    ...(session ? [{ label: "My Orders", to: "/orders" }] : []),
   ]
 
   return (
@@ -1223,6 +1417,7 @@ function App() {
           }
         />
         <Route path="/product/:productId" element={<ProductPage addToCartWithQty={addToCartWithQty} />} />
+        <Route path="/orders" element={<MyOrdersPage session={session} authLoading={authLoading} />} />
         <Route path="/login" element={<AuthPage onAuthed={() => {}} />} />
       </Routes>
 
@@ -1648,6 +1843,16 @@ function App() {
                   <LeafMark className="h-8 w-8 text-[#4B5D3A] mx-auto" />
                   <p className="text-lg font-serif">Order placed!</p>
                   <p className="text-sm text-[#24261F]/60">Thank you for shopping with MEDICRUISE.</p>
+                  <Link
+                    to="/orders"
+                    onClick={() => {
+                      setCheckoutStatus("idle")
+                      setCartOpen(false)
+                    }}
+                    className="block text-sm underline hover:text-[#4B5D3A]"
+                  >
+                    View my orders
+                  </Link>
                   <button
                     onClick={() => {
                       setCheckoutStatus("idle")
