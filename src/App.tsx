@@ -6,9 +6,10 @@ import cleanserImage from "./assets/cleanser.png.jpeg"
 import serumImage from "./assets/serum.png.jpeg"
 import moisturizerImage from "./assets/moisturizer.png.jpeg"
 import logo from "./assets/logo.png"
+import { supabase } from "./lib/supabaseClient"
 import AuthPage from "./AuthPage"
 import type { Session } from "@supabase/supabase-js"
-import { supabase } from "./lib/supabaseClient";
+
 /* ---------- brand tokens ----------
   ink      #24261F  – warm near-black for text
   cream    #F6F1E7  – base background
@@ -134,27 +135,11 @@ type AddressForm = {
   pincode: string
 }
 
-// ---------- Order history types ----------
-type OrderItemRow = {
-  id: string
-  product_id: string
-  product_name: string
-  price: number
-  quantity: number
-}
-
-type OrderRow = {
-  id: string
-  total: number
-  status: string
-  full_name: string
-  phone: string
-  address_line: string
-  city: string
-  state: string
-  pincode: string
-  created_at: string
-  order_items: OrderItemRow[]
+type PaymentForm = {
+  cardName: string
+  cardNumber: string
+  expiry: string
+  cvv: string
 }
 
 function LeafMark({ className = "" }: { className?: string }) {
@@ -822,204 +807,6 @@ function ProductPage({
   )
 }
 
-/* ---------------- MY ORDERS PAGE (own URL: /orders) ---------------- */
-
-// Orders in these statuses can still be cancelled
-const CANCELLABLE_STATUSES = ["placed", "pending", "processing"]
-
-function OrdersPage({ session }: { session: Session | null }) {
-  const [orders, setOrders] = useState<OrderRow[]>([])
-  const [loading, setLoading] = useState(true)
-  const [loadError, setLoadError] = useState(false)
-
-  // Cancel-order state
-  const [confirmingId, setConfirmingId] = useState<string | null>(null)
-  const [cancellingId, setCancellingId] = useState<string | null>(null)
-  const [cancelError, setCancelError] = useState<{ id: string; message: string } | null>(null)
-
-  useEffect(() => {
-    if (!session) {
-      setLoading(false)
-      return
-    }
-    setLoading(true)
-    supabase
-      .from("orders")
-      .select("*, order_items(*)")
-      .order("created_at", { ascending: false })
-      .then(({ data, error }) => {
-        if (error) {
-          console.error(error)
-          setLoadError(true)
-        } else {
-          setOrders((data as OrderRow[]) ?? [])
-        }
-        setLoading(false)
-      })
-  }, [session])
-
-  async function handleCancel(orderId: string) {
-    setCancellingId(orderId)
-    setCancelError(null)
-
-    const { data, error } = await supabase.rpc("cancel_order", { p_order_id: orderId })
-
-    setCancellingId(null)
-    setConfirmingId(null)
-
-    if (error) {
-      console.error(error)
-      setCancelError({ id: orderId, message: error.message })
-      return
-    }
-
-    // Update just this order in the list (keeps its order_items)
-    const updated = data as Partial<OrderRow>
-    setOrders((prev) => prev.map((o) => (o.id === orderId ? { ...o, ...updated } : o)))
-  }
-
-  if (!session) {
-    return (
-      <main className="max-w-3xl mx-auto px-6 py-24 text-center">
-        <LeafMark className="h-8 w-8 text-[#4B5D3A]/50 mx-auto mb-4" />
-        <p className="text-lg font-serif">Please log in to view your orders.</p>
-        <Link to="/login" className="mt-4 inline-block text-sm underline hover:text-[#4B5D3A]">
-          Go to Login
-        </Link>
-      </main>
-    )
-  }
-
-  if (loading) {
-    return (
-      <main className="max-w-3xl mx-auto px-6 py-24 text-center text-sm text-[#24261F]/60">
-        Loading your orders…
-      </main>
-    )
-  }
-
-  if (loadError) {
-    return (
-      <main className="max-w-3xl mx-auto px-6 py-24 text-center text-sm text-red-600">
-        Something went wrong loading your orders. Please refresh and try again.
-      </main>
-    )
-  }
-
-  if (orders.length === 0) {
-    return (
-      <main className="max-w-3xl mx-auto px-6 py-24 text-center">
-        <LeafMark className="h-8 w-8 text-[#4B5D3A]/50 mx-auto mb-4" />
-        <p className="text-lg font-serif">No orders yet.</p>
-        <Link to="/#products" className="mt-3 inline-block text-sm underline hover:text-[#4B5D3A]">
-          Browse products
-        </Link>
-      </main>
-    )
-  }
-
-  return (
-    <main className="max-w-4xl mx-auto px-6 py-16">
-      <h1 className="text-3xl font-serif mb-10">My Orders</h1>
-
-      <div className="space-y-6">
-        {orders.map((order) => {
-          const isCancelled = order.status.toLowerCase() === "cancelled"
-          const canCancel = CANCELLABLE_STATUSES.includes(order.status.toLowerCase())
-          const isConfirming = confirmingId === order.id
-          const isCancelling = cancellingId === order.id
-
-          return (
-            <div key={order.id} className="border border-[#24261F]/10 rounded-xl bg-white p-6">
-              <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
-                <div>
-                  <p className="text-sm font-medium">Order #{order.id.slice(0, 8)}</p>
-                  <p className="text-xs text-[#24261F]/50">
-                    {new Date(order.created_at).toLocaleDateString("en-IN", {
-                      day: "numeric",
-                      month: "short",
-                      year: "numeric",
-                    })}
-                  </p>
-                </div>
-                <span
-                  className={`text-[10px] tracking-wider uppercase px-2 py-1 rounded ${
-                    isCancelled ? "bg-red-50 text-red-700" : "bg-[#EFE6D8] text-[#4B5D3A]"
-                  }`}
-                >
-                  {order.status}
-                </span>
-              </div>
-
-              <ul className="divide-y divide-[#24261F]/10">
-                {order.order_items.map((item) => (
-                  <li key={item.id} className="py-2 flex items-center justify-between text-sm">
-                    <span>
-                      {item.product_name} × {item.quantity}
-                    </span>
-                    <span>₹{item.price * item.quantity}</span>
-                  </li>
-                ))}
-              </ul>
-
-              <div className="flex flex-wrap items-center justify-between gap-2 mt-4 pt-4 border-t border-[#24261F]/10 text-sm">
-                <span className="text-[#24261F]/60">
-                  {order.full_name} · {order.address_line}, {order.city}, {order.state} - {order.pincode} · {order.phone}
-                </span>
-                <span className="font-semibold whitespace-nowrap">Total: ₹{order.total}</span>
-              </div>
-
-              {/* CANCEL ORDER */}
-              {canCancel && (
-                <div className="mt-4 pt-4 border-t border-[#24261F]/10 flex flex-wrap items-center justify-between gap-3">
-                  {isConfirming ? (
-                    <>
-                      <p className="text-sm text-[#24261F]/70">Cancel this order? This can't be undone.</p>
-                      <div className="flex gap-2">
-                        <button
-                          onClick={() => setConfirmingId(null)}
-                          disabled={isCancelling}
-                          className="border border-[#24261F]/15 text-sm px-4 py-2 rounded-md hover:border-[#4B5D3A] hover:text-[#4B5D3A] transition-colors disabled:opacity-60"
-                        >
-                          Keep order
-                        </button>
-                        <button
-                          onClick={() => handleCancel(order.id)}
-                          disabled={isCancelling}
-                          className="bg-red-700 text-white text-sm px-4 py-2 rounded-md hover:bg-red-800 transition-colors disabled:opacity-60"
-                        >
-                          {isCancelling ? "Cancelling…" : "Yes, cancel order"}
-                        </button>
-                      </div>
-                    </>
-                  ) : (
-                    <>
-                      <span className="text-xs text-[#24261F]/50">You can cancel until your order ships.</span>
-                      <button
-                        onClick={() => {
-                          setCancelError(null)
-                          setConfirmingId(order.id)
-                        }}
-                        className="border border-red-700/40 text-red-700 text-sm px-4 py-2 rounded-md hover:bg-red-50 transition-colors"
-                      >
-                        Cancel Order
-                      </button>
-                    </>
-                  )}
-
-                  {cancelError?.id === order.id && (
-                    <p className="w-full text-xs text-red-600">{cancelError.message}</p>
-                  )}
-                </div>
-              )}
-            </div>
-          )
-        })}
-      </div>
-    </main>
-  )
-}
-
 /* ---------------- APP SHELL (navbar, footer, cart — persistent across routes) ---------------- */
 
 function App() {
@@ -1037,8 +824,8 @@ function App() {
   const [session, setSession] = useState<Session | null>(null)
   const [checkoutStatus, setCheckoutStatus] = useState<"idle" | "saving" | "success" | "error">("idle")
 
-  // Checkout step: "cart" (viewing bag) -> "address" (collect shipping details) -> submits order
-  const [checkoutStep, setCheckoutStep] = useState<"cart" | "address">("cart")
+  // Checkout flow: "cart" -> "address" -> "payment" -> (order saved) -> "cart" shows success
+  const [checkoutStep, setCheckoutStep] = useState<"cart" | "address" | "payment">("cart")
   const [addressForm, setAddressForm] = useState<AddressForm>({
     fullName: "",
     phone: "",
@@ -1048,6 +835,14 @@ function App() {
     pincode: "",
   })
   const [addressErrors, setAddressErrors] = useState<{ [k: string]: string }>({})
+
+  const [paymentForm, setPaymentForm] = useState<PaymentForm>({
+    cardName: "",
+    cardNumber: "",
+    expiry: "",
+    cvv: "",
+  })
+  const [paymentErrors, setPaymentErrors] = useState<{ [k: string]: string }>({})
 
   // Logout confirmation modal
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false)
@@ -1073,7 +868,7 @@ function App() {
     setShowLogoutConfirm(false)
   }
 
-  function handleAddressChange(e:React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) {
+  function handleAddressChange(e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) {
     const { name, value } = e.target
     setAddressForm((prev) => ({ ...prev, [name]: value }))
   }
@@ -1093,7 +888,12 @@ function App() {
     setAddressErrors({})
   }
 
-  async function handleAddressSubmit(e: React.FormEvent) {
+  function backToAddress() {
+    setCheckoutStep("address")
+    setPaymentErrors({})
+  }
+
+  function handleAddressSubmit(e: React.FormEvent) {
     e.preventDefault()
     const errors: { [k: string]: string } = {}
     if (!addressForm.fullName.trim()) errors.fullName = "Enter your full name."
@@ -1106,6 +906,30 @@ function App() {
     setAddressErrors(errors)
     if (Object.keys(errors).length > 0) return
 
+    setCheckoutStep("payment")
+  }
+
+  function handlePaymentChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const { name, value } = e.target
+    setPaymentForm((prev) => ({ ...prev, [name]: value }))
+  }
+
+  // NOTE: This is a placeholder / demo payment screen only.
+  // No card details are sent anywhere or charged — this simply validates the
+  // format of what's typed, then saves the order to the database as "paid".
+  // Swap this out for a real gateway (Razorpay, Stripe, etc.) before going live.
+  async function handlePaymentSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    const errors: { [k: string]: string } = {}
+    if (!paymentForm.cardName.trim()) errors.cardName = "Enter the name on the card."
+    if (!/^[0-9]{13,19}$/.test(paymentForm.cardNumber.replace(/\s/g, "")))
+      errors.cardNumber = "Enter a valid card number."
+    if (!/^(0[1-9]|1[0-2])\/[0-9]{2}$/.test(paymentForm.expiry.trim())) errors.expiry = "Use MM/YY format."
+    if (!/^[0-9]{3,4}$/.test(paymentForm.cvv.trim())) errors.cvv = "Enter a valid CVV."
+
+    setPaymentErrors(errors)
+    if (Object.keys(errors).length > 0) return
+
     await placeOrder()
   }
 
@@ -1116,11 +940,16 @@ function App() {
     }
     setCheckoutStatus("saving")
 
+    // Simulate a brief "processing payment" delay so it feels real —
+    // no actual charge happens anywhere in this flow.
+    await new Promise((resolve) => setTimeout(resolve, 1200))
+
     const { data: order, error: orderError } = await supabase
       .from("orders")
       .insert({
         user_id: session.user.id,
         total: subtotal,
+        payment_status: "paid",
         full_name: addressForm.fullName.trim(),
         phone: addressForm.phone.trim(),
         address_line: addressForm.addressLine.trim(),
@@ -1156,6 +985,7 @@ function App() {
     setCart([])
     setCheckoutStep("cart")
     setAddressForm({ fullName: "", phone: "", addressLine: "", city: "", state: "", pincode: "" })
+    setPaymentForm({ cardName: "", cardNumber: "", expiry: "", cvv: "" })
   }
 
   const itemCount = cart.reduce((sum, item) => sum + item.qty, 0)
@@ -1237,11 +1067,6 @@ function App() {
                 {link.label}
               </Link>
             ))}
-            {session && (
-              <Link to="/orders" className="hover:text-[#4B5D3A] transition-colors">
-                My Orders
-              </Link>
-            )}
           </div>
 
           <div className="flex items-center gap-3">
@@ -1310,15 +1135,6 @@ function App() {
                   </Link>
                 ))}
                 {session && (
-                  <Link
-                    to="/orders"
-                    onClick={() => setMenuOpen(false)}
-                    className="hover:text-[#4B5D3A] transition-colors"
-                  >
-                    My Orders
-                  </Link>
-                )}
-                {session ? (
                   <button
                     onClick={() => {
                       setMenuOpen(false)
@@ -1328,14 +1144,6 @@ function App() {
                   >
                     Logout
                   </button>
-                ) : (
-                  <Link
-                    to="/login"
-                    onClick={() => setMenuOpen(false)}
-                    className="hover:text-[#4B5D3A] transition-colors"
-                  >
-                    Login
-                  </Link>
                 )}
               </div>
             </motion.div>
@@ -1362,7 +1170,6 @@ function App() {
           }
         />
         <Route path="/product/:productId" element={<ProductPage addToCartWithQty={addToCartWithQty} />} />
-        <Route path="/orders" element={<OrdersPage session={session} />} />
         <Route path="/login" element={<AuthPage onAuthed={() => {}} />} />
       </Routes>
 
@@ -1378,9 +1185,6 @@ function App() {
             <Link to="/#products" className="hover:text-[#4B5D3A] transition-colors">Products</Link>
             <Link to="/#about" className="hover:text-[#4B5D3A] transition-colors">About</Link>
             <Link to="/#contact" className="hover:text-[#4B5D3A] transition-colors">Contact</Link>
-            {session && (
-              <Link to="/orders" className="hover:text-[#4B5D3A] transition-colors">My Orders</Link>
-            )}
           </div>
         </div>
 
@@ -1435,13 +1239,7 @@ function App() {
       <AnimatePresence>
         {cartOpen && (
           <>
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setCartOpen(false)}
-              className="fixed inset-0 bg-black/40 z-50"
-            />
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setCartOpen(false)} className="fixed inset-0 bg-black/40 z-50" />
             <motion.aside
               initial={{ x: "100%" }}
               animate={{ x: 0 }}
@@ -1451,113 +1249,85 @@ function App() {
             >
               <div className="flex items-center justify-between px-6 py-5 border-b border-[#24261F]/10">
                 <h3 className="text-lg font-serif">
-                  {checkoutStep === "address" ? "Shipping Details" : `Your Bag (${itemCount})`}
+                  {checkoutStep === "address"
+                    ? "Shipping Details"
+                    : checkoutStep === "payment"
+                    ? "Payment"
+                    : `Your Bag (${itemCount})`}
                 </h3>
                 <button onClick={() => setCartOpen(false)} aria-label="Close cart" className="p-1 hover:text-[#4B5D3A]">
                   <CloseIcon className="h-5 w-5" />
                 </button>
               </div>
 
-              {/* CART VIEW */}
               {checkoutStep === "cart" && (
-                <>
-                  <div className="flex-1 overflow-y-auto px-6 py-4">
-                    {cart.length === 0 ? (
-                      <div className="h-full flex flex-col items-center justify-center text-center gap-3">
-                        <LeafMark className="h-8 w-8 text-[#4B5D3A]/50" />
-                        <p className="text-sm text-[#24261F]/60">Your bag is empty. Explore our collection to get started.</p>
-                        <Link
-                          to="/#products"
-                          onClick={() => setCartOpen(false)}
-                          className="mt-2 text-sm underline hover:text-[#4B5D3A]"
-                        >
-                          Browse products
-                        </Link>
-                      </div>
-                    ) : (
-                      <ul className="space-y-5">
-                        {cart.map((item) => (
-                          <li key={item.id} className="flex gap-4">
-                            <div className="h-20 w-20 shrink-0 bg-white border border-[#24261F]/10 rounded-md p-2">
-                              <img src={item.image} alt={item.name} className="h-full w-full object-contain" />
-                            </div>
-
-                            <div className="flex-1">
-                              <div className="flex items-start justify-between gap-2">
-                                <p className="text-sm font-medium">{item.name}</p>
-                                <button onClick={() => removeFromCart(item.id)} aria-label={`Remove ${item.name}`} className="text-[#24261F]/40 hover:text-red-600 transition-colors">
-                                  <CloseIcon className="h-3.5 w-3.5" />
-                                </button>
-                              </div>
-
-                              <p className="text-sm text-[#24261F]/60 mt-1">₹{item.price}</p>
-
-                              <div className="flex items-center gap-3 mt-2">
-                                <button onClick={() => updateQty(item.id, -1)} className="h-7 w-7 border border-[#24261F]/15 rounded-md hover:border-[#4B5D3A]">
-                                  −
-                                </button>
-                                <span className="text-sm w-4 text-center">{item.qty}</span>
-                                <button onClick={() => updateQty(item.id, 1)} className="h-7 w-7 border border-[#24261F]/15 rounded-md hover:border-[#4B5D3A]">
-                                  +
-                                </button>
-                              </div>
-                            </div>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
+              <div className="flex-1 overflow-y-auto px-6 py-4">
+                {cart.length === 0 ? (
+                  <div className="h-full flex flex-col items-center justify-center text-center gap-3">
+                    <LeafMark className="h-8 w-8 text-[#4B5D3A]/50" />
+                    <p className="text-sm text-[#24261F]/60">Your bag is empty. Explore our collection to get started.</p>
+                    <Link
+                      to="/#products"
+                      onClick={() => setCartOpen(false)}
+                      className="mt-2 text-sm underline hover:text-[#4B5D3A]"
+                    >
+                      Browse products
+                    </Link>
                   </div>
+                ) : (
+                  <ul className="space-y-5">
+                    {cart.map((item) => (
+                      <li key={item.id} className="flex gap-4">
+                        <div className="h-20 w-20 shrink-0 bg-white border border-[#24261F]/10 rounded-md p-2">
+                          <img src={item.image} alt={item.name} className="h-full w-full object-contain" />
+                        </div>
 
-                  {cart.length > 0 && checkoutStatus !== "success" && (
-                    <div className="border-t border-[#24261F]/10 px-6 py-5 space-y-4">
-                      <div className="flex items-center justify-between text-sm">
-                        <span className="text-[#24261F]/60">Subtotal</span>
-                        <span className="font-semibold">₹{subtotal}</span>
-                      </div>
-                      {checkoutStatus === "error" && (
-                        <p className="text-xs text-red-600">Something went wrong saving your order. Please try again.</p>
-                      )}
-                      <button
-                        onClick={goToAddressStep}
-                        className="w-full bg-[#24261F] text-white text-sm py-3 rounded-md hover:bg-[#4B5D3A] transition-colors"
-                      >
-                        {session ? "Proceed to Checkout" : "Login to Checkout"}
-                      </button>
-                    </div>
-                  )}
+                        <div className="flex-1">
+                          <div className="flex items-start justify-between gap-2">
+                            <p className="text-sm font-medium">{item.name}</p>
+                            <button onClick={() => removeFromCart(item.id)} aria-label={`Remove ${item.name}`} className="text-[#24261F]/40 hover:text-red-600 transition-colors">
+                              <CloseIcon className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
 
-                  {checkoutStatus === "success" && (
-                    <div className="border-t border-[#24261F]/10 px-6 py-8 text-center space-y-3">
-                      <LeafMark className="h-8 w-8 text-[#4B5D3A] mx-auto" />
-                      <p className="text-lg font-serif">Order placed!</p>
-                      <p className="text-sm text-[#24261F]/60">Thank you for shopping with MEDICRUISE.</p>
-                      <div className="flex items-center justify-center gap-4">
-                        <button
-                          onClick={() => {
-                            setCheckoutStatus("idle")
-                            setCartOpen(false)
-                          }}
-                          className="text-sm underline hover:text-[#4B5D3A]"
-                        >
-                          Continue Shopping
-                        </button>
-                        <Link
-                          to="/orders"
-                          onClick={() => {
-                            setCheckoutStatus("idle")
-                            setCartOpen(false)
-                          }}
-                          className="text-sm underline hover:text-[#4B5D3A]"
-                        >
-                          View My Orders
-                        </Link>
-                      </div>
-                    </div>
-                  )}
-                </>
+                          <p className="text-sm text-[#24261F]/60 mt-1">₹{item.price}</p>
+
+                          <div className="flex items-center gap-3 mt-2">
+                            <button onClick={() => updateQty(item.id, -1)} className="h-7 w-7 border border-[#24261F]/15 rounded-md hover:border-[#4B5D3A]">
+                              −
+                            </button>
+                            <span className="text-sm w-4 text-center">{item.qty}</span>
+                            <button onClick={() => updateQty(item.id, 1)} className="h-7 w-7 border border-[#24261F]/15 rounded-md hover:border-[#4B5D3A]">
+                              +
+                            </button>
+                          </div>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
               )}
 
-              {/* ADDRESS FORM VIEW */}
+              {checkoutStep === "cart" && cart.length > 0 && checkoutStatus !== "success" && (
+                <div className="border-t border-[#24261F]/10 px-6 py-5 space-y-4">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-[#24261F]/60">Subtotal</span>
+                    <span className="font-semibold">₹{subtotal}</span>
+                  </div>
+                  {checkoutStatus === "error" && (
+                    <p className="text-xs text-red-600">Something went wrong saving your order. Please try again.</p>
+                  )}
+                  <button
+                    onClick={goToAddressStep}
+                    className="w-full bg-[#24261F] text-white text-sm py-3 rounded-md hover:bg-[#4B5D3A] transition-colors"
+                  >
+                    {session ? "Proceed to Checkout" : "Login to Checkout"}
+                  </button>
+                </div>
+              )}
+
+              {/* ADDRESS FORM STEP */}
               {checkoutStep === "address" && (
                 <form onSubmit={handleAddressSubmit} className="flex-1 overflow-y-auto px-6 py-5 flex flex-col">
                   <button
@@ -1655,6 +1425,113 @@ function App() {
                       <span className="text-[#24261F]/60">Subtotal</span>
                       <span className="font-semibold">₹{subtotal}</span>
                     </div>
+                    <button
+                      type="submit"
+                      className="w-full bg-[#24261F] text-white text-sm py-3 rounded-md hover:bg-[#4B5D3A] transition-colors"
+                    >
+                      Continue to Payment
+                    </button>
+                  </div>
+                </form>
+              )}
+
+              {/* PAYMENT STEP (demo only — no real charge happens) */}
+              {checkoutStep === "payment" && (
+                <form onSubmit={handlePaymentSubmit} className="flex-1 overflow-y-auto px-6 py-5 flex flex-col">
+                  <button
+                    type="button"
+                    onClick={backToAddress}
+                    disabled={checkoutStatus === "saving"}
+                    className="flex items-center gap-2 text-sm text-[#24261F]/60 hover:text-[#4B5D3A] transition-colors mb-5 disabled:opacity-40"
+                  >
+                    <ArrowLeftIcon className="h-4 w-4" />
+                    Back to address
+                  </button>
+
+                  <div className="space-y-4 flex-1">
+                    <div className="rounded-lg bg-white border border-[#24261F]/10 p-4">
+                      <div className="flex items-center justify-between mb-3">
+                        <span className="text-xs uppercase tracking-wider text-[#24261F]/50">Card Payment</span>
+                        <div className="flex gap-1.5">
+                          <div className="h-5 w-8 rounded bg-[#EFE6D8]" />
+                          <div className="h-5 w-8 rounded bg-[#EFE6D8]" />
+                        </div>
+                      </div>
+
+                      <div className="space-y-4">
+                        <div>
+                          <label className="mb-1.5 block text-sm">Name on Card</label>
+                          <input
+                            type="text"
+                            name="cardName"
+                            value={paymentForm.cardName}
+                            onChange={handlePaymentChange}
+                            placeholder="Name as on card"
+                            autoComplete="cc-name"
+                            className="w-full border border-[#24261F]/15 bg-transparent px-4 py-2.5 outline-none transition focus:border-[#4B5D3A] rounded-md text-sm"
+                          />
+                          {paymentErrors.cardName && <p className="mt-1 text-xs text-red-600">{paymentErrors.cardName}</p>}
+                        </div>
+
+                        <div>
+                          <label className="mb-1.5 block text-sm">Card Number</label>
+                          <input
+                            type="text"
+                            name="cardNumber"
+                            value={paymentForm.cardNumber}
+                            onChange={handlePaymentChange}
+                            placeholder="1234 5678 9012 3456"
+                            inputMode="numeric"
+                            autoComplete="cc-number"
+                            maxLength={19}
+                            className="w-full border border-[#24261F]/15 bg-transparent px-4 py-2.5 outline-none transition focus:border-[#4B5D3A] rounded-md text-sm"
+                          />
+                          {paymentErrors.cardNumber && <p className="mt-1 text-xs text-red-600">{paymentErrors.cardNumber}</p>}
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <label className="mb-1.5 block text-sm">Expiry</label>
+                            <input
+                              type="text"
+                              name="expiry"
+                              value={paymentForm.expiry}
+                              onChange={handlePaymentChange}
+                              placeholder="MM/YY"
+                              autoComplete="cc-exp"
+                              maxLength={5}
+                              className="w-full border border-[#24261F]/15 bg-transparent px-4 py-2.5 outline-none transition focus:border-[#4B5D3A] rounded-md text-sm"
+                            />
+                            {paymentErrors.expiry && <p className="mt-1 text-xs text-red-600">{paymentErrors.expiry}</p>}
+                          </div>
+                          <div>
+                            <label className="mb-1.5 block text-sm">CVV</label>
+                            <input
+                              type="password"
+                              name="cvv"
+                              value={paymentForm.cvv}
+                              onChange={handlePaymentChange}
+                              placeholder="•••"
+                              autoComplete="cc-csc"
+                              maxLength={4}
+                              className="w-full border border-[#24261F]/15 bg-transparent px-4 py-2.5 outline-none transition focus:border-[#4B5D3A] rounded-md text-sm"
+                            />
+                            {paymentErrors.cvv && <p className="mt-1 text-xs text-red-600">{paymentErrors.cvv}</p>}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <p className="text-[11px] text-[#24261F]/40 text-center">
+                      🔒 Payments are securely encrypted.
+                    </p>
+                  </div>
+
+                  <div className="border-t border-[#24261F]/10 mt-5 pt-5 space-y-4">
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-[#24261F]/60">Total</span>
+                      <span className="font-semibold">₹{subtotal}</span>
+                    </div>
                     {checkoutStatus === "error" && (
                       <p className="text-xs text-red-600">Something went wrong saving your order. Please try again.</p>
                     )}
@@ -1663,10 +1540,27 @@ function App() {
                       disabled={checkoutStatus === "saving"}
                       className="w-full bg-[#24261F] text-white text-sm py-3 rounded-md hover:bg-[#4B5D3A] transition-colors disabled:opacity-60"
                     >
-                      {checkoutStatus === "saving" ? "Placing order…" : `Place Order — ₹${subtotal}`}
+                      {checkoutStatus === "saving" ? "Processing payment…" : `Pay ₹${subtotal}`}
                     </button>
                   </div>
                 </form>
+              )}
+
+              {checkoutStep === "cart" && checkoutStatus === "success" && (
+                <div className="border-t border-[#24261F]/10 px-6 py-8 text-center space-y-3">
+                  <LeafMark className="h-8 w-8 text-[#4B5D3A] mx-auto" />
+                  <p className="text-lg font-serif">Order placed!</p>
+                  <p className="text-sm text-[#24261F]/60">Thank you for shopping with MEDICRUISE.</p>
+                  <button
+                    onClick={() => {
+                      setCheckoutStatus("idle")
+                      setCartOpen(false)
+                    }}
+                    className="text-sm underline hover:text-[#4B5D3A]"
+                  >
+                    Continue Shopping
+                  </button>
+                </div>
               )}
             </motion.aside>
           </>
